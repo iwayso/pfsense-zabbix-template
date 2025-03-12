@@ -187,29 +187,25 @@ function pfz_openvpn_servervalue($server_id, $valuekey) {
     foreach ($servers as $server) {
         if ($server['vpnid'] == $server_id) {
             $value = $server[$valuekey];
-            file_put_contents("/tmp/openvpn_debug.log", "Server $server_id - Mode: {$server['mode']}, Status: '$value'\n", FILE_APPEND);
             if ($valuekey === "status") {
-                if (in_array($server['mode'], ["server_user", "server_tls_user", "server_tls"])) {
-                    if ($value === "") {
-                        $value = "server_user_listening";
-                    }
-                } elseif ($server['mode'] === "p2p_tls") {
-                    if ($value === "") {
-                        $value = (is_array($server["conns"]) && count($server["conns"]) > 0) ? "up" : "down";
-                    }
+                if (in_array($server['mode'], ["server_user", "server_tls_user", "server_tls"]) && $value === "") {
+                    $value = "server_user_listening"; // Forcer cette logique
+                } elseif ($server['mode'] === "p2p_tls" && $value === "") {
+                    $value = (is_array($server["conns"]) && count($server["conns"]) > 0) ? "up" : "down";
                 }
             }
-            file_put_contents("/tmp/openvpn_debug.log", "After conditions - Value: '$value'\n", FILE_APPEND);
             break;
         }
     }
-    switch ($valuekey) {
-        case "conns": $value = is_array($value) ? count($value) : "0"; break;
-        case "status": $value = pfz_valuemap("openvpn.server.status", $value); break;
-        case "mode": $value = pfz_valuemap("openvpn.server.mode", $value); break;
+    // Appliquer le mappage après la boucle
+    if ($valuekey === "status") {
+        $value = pfz_valuemap("openvpn.server.status", $value);
+    } elseif ($valuekey === "conns") {
+        $value = is_array($value) ? count($value) : "0";
+    } elseif ($valuekey === "mode") {
+        $value = pfz_valuemap("openvpn.server.mode", $value);
     }
-    file_put_contents("/tmp/openvpn_debug.log", "After mapping - Value: '$value'\n", FILE_APPEND);
-    echo $value ?: "2";
+    echo $value ?: "2"; // "none" par défaut
 }
 
 // Découverte des utilisateurs OpenVPN
