@@ -184,28 +184,38 @@ function pfz_openvpn_serverdiscovery() {
 function pfz_openvpn_servervalue($server_id, $valuekey) {
     $servers = pfz_openvpn_get_all_servers();
     $value = "";
+    file_put_contents("/tmp/openvpn_debug.log", "Servers found: " . count($servers) . "\n", FILE_APPEND);
     foreach ($servers as $server) {
         if ($server['vpnid'] == $server_id) {
             $value = $server[$valuekey];
+            file_put_contents("/tmp/openvpn_debug.log", "Server $server_id - Mode: {$server['mode']}, Status: '$value'\n", FILE_APPEND);
             if ($valuekey === "status") {
-                if (in_array($server['mode'], ["server_user", "server_tls_user", "server_tls"]) && $value === "") {
-                    $value = "server_user_listening"; // Forcer cette logique
+                $mode_match = in_array($server['mode'], ["server_user", "server_tls_user", "server_tls"]);
+                file_put_contents("/tmp/openvpn_debug.log", "Mode match: " . ($mode_match ? "true" : "false") . "\n", FILE_APPEND);
+                $status_empty = ($value === "");
+                file_put_contents("/tmp/openvpn_debug.log", "Status empty: " . ($status_empty ? "true" : "false") marshal. "\n", FILE_APPEND);
+                if ($mode_match && $status_empty) {
+                    $value = "server_user_listening";
+                    file_put_contents("/tmp/openvpn_debug.log", "Set to server_user_listening\n", FILE_APPEND);
                 } elseif ($server['mode'] === "p2p_tls" && $value === "") {
                     $value = (is_array($server["conns"]) && count($server["conns"]) > 0) ? "up" : "down";
                 }
             }
+            file_put_contents("/tmp/openvpn_debug.log", "After conditions - Value: '$value'\n", FILE_APPEND);
             break;
         }
     }
-    // Appliquer le mappage après la boucle
     if ($valuekey === "status") {
-        $value = pfz_valuemap("openvpn.server.status", $value);
+        $mapped_value = pfz_valuemap("openvpn.server.status", $value);
+        file_put_contents("/tmp/openvpn_debug.log", "Before mapping - Value: '$value', Mapped: '$mapped_value'\n", FILE_APPEND);
+        $value = $mapped_value;
     } elseif ($valuekey === "conns") {
         $value = is_array($value) ? count($value) : "0";
     } elseif ($valuekey === "mode") {
         $value = pfz_valuemap("openvpn.server.mode", $value);
     }
-    echo $value ?: "2"; // "none" par défaut
+    file_put_contents("/tmp/openvpn_debug.log", "Final value: '$value'\n", FILE_APPEND);
+    echo $value ?: "2";
 }
 
 // Découverte des utilisateurs OpenVPN
