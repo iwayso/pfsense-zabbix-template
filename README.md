@@ -1,4 +1,12 @@
-[![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/rbicelli)
+# myFork
+
+Just adding my optimizations to improve item retrieval speed :
+- cache statix
+- APCu
+- Perf JSON
+
+
+[![Buy A Coffee to rbicelli](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/rbicelli)
 
 # pfSense Zabbix Template
 
@@ -124,7 +132,7 @@ Remember that you will need to install the package on *every* pfSense upgrade.
 Speedtest template creates a cron job and check for entry everytime Zabbix requests its items. If you  want to uninstall the cron jobs simply run, from **Diagnostics/Command Prompt**:
 
 ```bash
-/url/local/bin/php /root/scripts/pfsense_zbx.php cron_cleanup
+/usr/local/bin/php /root/scripts/pfsense_zbx.php cron_cleanup
 ```
 
 ## Credits
