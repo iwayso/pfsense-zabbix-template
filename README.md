@@ -6,7 +6,7 @@ Just adding my optimizations to improve item retrieval speed :
 - Perf JSON
 
 
-[![Buy A Coffee to rbicelli](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/rbicelli)
+[![Buy A Coffee to rbicelli]](https://www.buymeacoffee.com/rbicelli)
 
 # pfSense Zabbix Template
 
