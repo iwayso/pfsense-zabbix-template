@@ -1,14 +1,14 @@
 <?php
 /*** 
 pfsense_zbx.php - pfSense Zabbix Interface
-Version 0.24.8 - 2025-03-12
+Version 0.24.9 - 2025-03-12
 Original written by Riccardo Bicelli <r.bicelli@gmail.com>
-Optimized version
+Optimized version with improved IPSEC caching
 This program is licensed under Apache 2.0 License
 */
 
 //Some Useful defines
-define('SCRIPT_VERSION', '0.24.8');
+define('SCRIPT_VERSION', '0.24.9');
 
 define('SPEEDTEST_INTERVAL', 8); //Speedtest Interval (in hours)
 define('CRON_TIME_LIMIT', 300); // Time limit in seconds of speedtest and sysinfo 
@@ -18,6 +18,7 @@ define('DEFAULT_TIME_LIMIT', 30); // Time limit in seconds otherwise
 define('CACHE_DURATION_SHORT', 60); // 1 minute
 define('CACHE_DURATION_MEDIUM', 300); // 5 minutes
 define('CACHE_DURATION_LONG', 3600); // 1 hour
+define('CACHE_DURATION_STATIC', 86400); // 24 hours - for values that rarely change
 
 // Cache directory
 define('CACHE_DIR', '/tmp/pfz_cache');
@@ -65,6 +66,38 @@ function pfz_get_cache($key, $duration = CACHE_DURATION_MEDIUM) {
 function pfz_set_cache($key, $data) {
     $cache_file = CACHE_DIR . '/' . md5($key) . '.cache';
     file_put_contents($cache_file, serialize($data));
+}
+
+// Get IPSEC configuration with caching
+function pfz_get_ipsec_config($phase = 'phase1') {
+    $cache_key = "ipsec_config_{$phase}";
+    $cache = pfz_get_cache($cache_key, CACHE_DURATION_STATIC);
+    
+    if ($cache !== null) {
+        return $cache;
+    }
+    
+    include_once_track('ipsec.inc');
+    global $config;
+    
+    init_config_arr(array('ipsec', $phase));
+    $config_data = &$config['ipsec'][$phase];
+    
+    pfz_set_cache($cache_key, $config_data);
+    return $config_data;
+}
+
+// Helper function to determine if a value is static or dynamic
+function pfz_is_static_ipsec_value($valuekey) {
+    $static_values = array(
+        'iketype', 'mode', 'protocol', 'interface', 'remote-gateway', 
+        'encryption', 'lifetime', 'disabled', 'authentication_method',
+        'descr', 'nat', 'localid', 'remoteid', 'mobike', 'rekey_enable',
+        'dpd_delay', 'dpd_maxfail', 'closeaction', 'reauth_enable',
+        'tunnel_local', 'tunnel_remote', 'pfsgroup'
+    );
+    
+    return in_array($valuekey, $static_values);
 }
 
 //Testing function, for template creating purpose
@@ -642,7 +675,6 @@ function pfz_gw_value($gw, $valuekey) {
 
 // IPSEC Discovery
 function pfz_ipsec_discovery_ph1() {
-    include_once_track('ipsec.inc');
     $cache_key = "ipsec_discovery_ph1";
     $cache = pfz_get_cache($cache_key);
     
@@ -651,9 +683,7 @@ function pfz_ipsec_discovery_ph1() {
         return;
     }
     
-    global $config;
-    init_config_arr(array('ipsec', 'phase1'));
-    $a_phase1 = &$config['ipsec']['phase1'];
+    $a_phase1 = pfz_get_ipsec_config('phase1');
     
     $json_data = array('data' => array());
     
@@ -670,11 +700,42 @@ function pfz_ipsec_discovery_ph1() {
     echo $json_string;
 }
 
-function pfz_ipsec_ph1($ikeid, $valuekey) {    
-    // Get Value from IPsec Phase 1 Configuration
-    // If Getting "disabled" value only check item presence in config array
-    include_once_track('ipsec.inc');
+// Get cached static configuration values for IPSEC Phase 1
+function pfz_get_ipsec_ph1_static_value($ikeid, $valuekey) {
+    $cache_key = "ipsec_ph1_static_{$ikeid}_{$valuekey}";
+    $cache = pfz_get_cache($cache_key, CACHE_DURATION_STATIC);
     
+    if ($cache !== null) {
+        return $cache;
+    }
+    
+    $a_phase1 = pfz_get_ipsec_config('phase1');
+    
+    $value = "";
+    foreach ($a_phase1 as $data) {
+        if ($data['ikeid'] == $ikeid) {
+            if (array_key_exists($valuekey, $data)) {
+                if ($valuekey == 'disabled')
+                    $value = "1";
+                else
+                    $value = pfz_valuemap("ipsec." . $valuekey, $data[$valuekey], $data[$valuekey]);
+                break;
+            }
+        }
+    }
+    
+    pfz_set_cache($cache_key, $value);
+    return $value;
+}
+
+function pfz_ipsec_ph1($ikeid, $valuekey) {    
+    // If the value is static (like iketype, mode, etc.), use longer cache
+    if (pfz_is_static_ipsec_value($valuekey)) {
+        echo pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
+        return;
+    }
+    
+    // For non-static values like status
     $cache_key = "ipsec_ph1_{$ikeid}_{$valuekey}";
     $cache = pfz_get_cache($cache_key, CACHE_DURATION_SHORT);
     
@@ -683,10 +744,6 @@ function pfz_ipsec_ph1($ikeid, $valuekey) {
         return;
     }
     
-    global $config;
-    init_config_arr(array('ipsec', 'phase1'));
-    $a_phase1 = &$config['ipsec']['phase1'];    
-
     $value = "";    
     switch ($valuekey) {
         case 'status':
@@ -694,20 +751,12 @@ function pfz_ipsec_ph1($ikeid, $valuekey) {
             break;
             
         case 'disabled':
-            $value = "0";        
+            $value = pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
+            if (empty($value)) $value = "0";
+            break;
             
         default:
-            foreach ($a_phase1 as $data) {
-                if ($data['ikeid'] == $ikeid) {
-                    if (array_key_exists($valuekey, $data)) {
-                        if ($valuekey == 'disabled')
-                            $value = "1";
-                        else
-                            $value = pfz_valuemap("ipsec." . $valuekey, $data[$valuekey], $data[$valuekey]);
-                        break;
-                    }
-                }
-            }        
+            $value = pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
     }
     
     pfz_set_cache($cache_key, $value);
@@ -715,7 +764,6 @@ function pfz_ipsec_ph1($ikeid, $valuekey) {
 }
 
 function pfz_ipsec_discovery_ph2() {
-    include_once_track('ipsec.inc');
     $cache_key = "ipsec_discovery_ph2";
     $cache = pfz_get_cache($cache_key);
     
@@ -724,9 +772,7 @@ function pfz_ipsec_discovery_ph2() {
         return;
     }
     
-    global $config;
-    init_config_arr(array('ipsec', 'phase2'));
-    $a_phase2 = &$config['ipsec']['phase2'];
+    $a_phase2 = pfz_get_ipsec_config('phase2');
     
     $json_data = array('data' => array());
     
@@ -746,9 +792,44 @@ function pfz_ipsec_discovery_ph2() {
     echo $json_string;
 }
 
-function pfz_ipsec_ph2($uniqid, $valuekey) {
-    include_once_track('ipsec.inc');
+// Get cached static configuration values for IPSEC Phase 2
+function pfz_get_ipsec_ph2_static_value($uniqid, $valuekey) {
+    $cache_key = "ipsec_ph2_static_{$uniqid}_{$valuekey}";
+    $cache = pfz_get_cache($cache_key, CACHE_DURATION_STATIC);
     
+    if ($cache !== null) {
+        return $cache;
+    }
+    
+    $a_phase2 = pfz_get_ipsec_config('phase2');
+    
+    $value = "";
+    foreach ($a_phase2 as $data) {
+        if ($data['uniqid'] == $uniqid) {
+            if (array_key_exists($valuekey, $data)) {
+                if ($valuekey == 'disabled')
+                    $value = "1";
+                else
+                    $value = pfz_valuemap("ipsec_ph2." . $valuekey, $data[$valuekey], $data[$valuekey]);
+                break;
+            }
+        }
+    }
+    
+    pfz_set_cache($cache_key, $value);
+    return $value;
+}
+
+function pfz_ipsec_ph2($uniqid, $valuekey) {
+    $valuecfr = explode(".", $valuekey);
+    
+    // If the value is static (like mode, protocol, etc.), use longer cache
+    if (pfz_is_static_ipsec_value($valuekey)) {
+        echo pfz_get_ipsec_ph2_static_value($uniqid, $valuekey);
+        return;
+    }
+    
+    // For non-static values
     $cache_key = "ipsec_ph2_{$uniqid}_{$valuekey}";
     $cache = pfz_get_cache($cache_key, CACHE_DURATION_SHORT);
     
@@ -757,11 +838,6 @@ function pfz_ipsec_ph2($uniqid, $valuekey) {
         return;
     }
     
-    global $config;
-    init_config_arr(array('ipsec', 'phase2'));
-    $a_phase2 = &$config['ipsec']['phase2'];    
-    
-    $valuecfr = explode(".", $valuekey);
     $value = "";
         
     switch ($valuecfr[0]) {
@@ -773,22 +849,12 @@ function pfz_ipsec_ph2($uniqid, $valuekey) {
             break;
             
         case 'disabled':
-            $value = "0";
+            $value = pfz_get_ipsec_ph2_static_value($uniqid, 'disabled');
+            if (empty($value)) $value = "0";
             break;
-    }                            
-    
-    if (empty($value)) {
-        foreach ($a_phase2 as $data) {
-            if ($data['uniqid'] == $uniqid) {
-                if (array_key_exists($valuekey, $data)) {
-                    if ($valuekey == 'disabled')
-                        $value = "1";
-                    else
-                        $value = pfz_valuemap("ipsec_ph2." . $valuekey, $data[$valuekey], $data[$valuekey]);
-                    break;
-                }
-            }
-        }
+            
+        default:
+            $value = pfz_get_ipsec_ph2_static_value($uniqid, $valuekey);
     }
     
     pfz_set_cache($cache_key, $value);
@@ -796,19 +862,18 @@ function pfz_ipsec_ph2($uniqid, $valuekey) {
 }
 
 function pfz_ipsec_status($ikeid, $reqid = -1, $valuekey = 'state') {
-    include_once_track('ipsec.inc');
-    
     $cache_key = "ipsec_status_{$ikeid}_{$reqid}_{$valuekey}";
     $cache = pfz_get_cache($cache_key, CACHE_DURATION_SHORT);
     
     if ($cache !== null) {
         return $cache;
     }
-        
+    
+    include_once_track('ipsec.inc');
+    
     global $config;
-    init_config_arr(array('ipsec', 'phase1'));
-
-    $a_phase1 = &$config['ipsec']['phase1'];
+    $a_phase1 = pfz_get_ipsec_config('phase1');
+    
     $conmap = array();
     foreach ($a_phase1 as $ph1ent) {
         if (function_exists('get_ipsecifnum')) {
