@@ -186,6 +186,7 @@ function pfz_openvpn_servervalue($server_id, $valuekey) {
     foreach ($servers as $server) {
         if ($server['vpnid'] == $server_id) {
             $value = $server[$valuekey];
+            file_put_contents("/tmp/openvpn_debug.log", "Server 18 - Mode: {$server['mode']}, Status: '$value'\n", FILE_APPEND);
             if ($valuekey === "status") {
                 if (in_array($server['mode'], ["server_user", "server_tls_user", "server_tls"]) && $value === "") {
                     $value = "server_user_listening";
@@ -193,15 +194,18 @@ function pfz_openvpn_servervalue($server_id, $valuekey) {
                     $value = (is_array($server["conns"]) && count($server["conns"]) > 0) ? "up" : "down";
                 }
             }
+            file_put_contents("/tmp/openvpn_debug.log", "After conditions - Value: '$value'\n", FILE_APPEND);
             switch ($valuekey) {
                 case "conns": $value = is_array($value) ? count($value) : "0"; break;
                 case "status": $value = pfz_valuemap("openvpn.server.status", $value); break;
                 case "mode": $value = pfz_valuemap("openvpn.server.mode", $value); break;
             }
+            file_put_contents("/tmp/openvpn_debug.log", "After mapping - Value: '$value'\n", FILE_APPEND);
             echo $value;
             return;
         }
     }
+    file_put_contents("/tmp/openvpn_debug.log", "Server 18 not found\n", FILE_APPEND);
 }
 
 // Découverte des utilisateurs OpenVPN
