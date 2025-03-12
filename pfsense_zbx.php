@@ -184,7 +184,7 @@ function pfz_openvpn_serverdiscovery() {
 function pfz_openvpn_servervalue($server_id, $valuekey) {
     $servers = pfz_openvpn_get_all_servers();
     foreach ($servers as $server) {
-        if ($server['vpnid'] === $server_id) {
+        if ($server['vpnid'] == $server_id) {
             $value = $server[$valuekey];
             if ($valuekey === "status") {
                 if (in_array($server['mode'], ["server_user", "server_tls_user", "server_tls"]) && $value === "") {
