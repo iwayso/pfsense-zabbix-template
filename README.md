@@ -1,10 +1,15 @@
 # myFork
 
 Just adding my optimizations to improve item retrieval speed :
-- cache statix
+- cache static
 - APCu
 - Perf JSON
+- cache files for value standard (OpenVPN/IPSec...)
 
+Command to clear cache : 
+```bash
+php /root/scripts/pfsense_zbx.php clear_cache
+```
 
 [![Buy A Coffee to rbicelli]](https://www.buymeacoffee.com/rbicelli)
 
