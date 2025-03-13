@@ -94,7 +94,7 @@ function pfz_is_static_ipsec_value($valuekey) {
         'encryption', 'lifetime', 'disabled', 'authentication_method',
         'descr', 'nat', 'localid', 'remoteid', 'mobike', 'rekey_enable',
         'dpd_delay', 'dpd_maxfail', 'closeaction', 'reauth_enable',
-        'tunnel_local', 'tunnel_remote', 'pfsgroup'
+        'tunnel_local', 'tunnel_remote', 'pfsgroup', 'p1mode'  // Ajout de "p1mode"
     );
     
     return in_array($valuekey, $static_values);
@@ -711,8 +711,18 @@ function pfz_get_ipsec_ph1_static_value($ikeid, $valuekey) {
     
     $a_phase1 = pfz_get_ipsec_config('phase1');
     
-    // Par défaut un tunnel n'est pas désactivé (0)
-    $value = ($valuekey == 'disabled') ? "0" : "";
+    // Valeurs par défaut selon le type
+    if ($valuekey == 'disabled') {
+        $value = "0";  // Par défaut un tunnel n'est pas désactivé
+    } else if ($valuekey == 'mode' || $valuekey == 'p1mode') {
+        $value = "0";  // Par défaut, main mode (0)
+    } else if ($valuekey == 'iketype') {
+        $value = "0";  // Par défaut, auto (0)
+    } else if ($valuekey == 'protocol') {
+        $value = "0";  // Par défaut, both (0)
+    } else {
+        $value = "";
+    }
     
     foreach ($a_phase1 as $data) {
         if ($data['ikeid'] == $ikeid) {
@@ -738,7 +748,35 @@ function pfz_ipsec_ph1($ikeid, $valuekey) {
         return;
     }
     
-    // If the value is static (like iketype, mode, etc.), use longer cache
+    // Cas spécial pour "mode" - vérifier si c'est en fait "p1mode" dans la config
+    if ($valuekey == 'mode') {
+        $cache_key = "ipsec_ph1_{$ikeid}_mode";
+        $cache = pfz_get_cache($cache_key, CACHE_DURATION_STATIC);
+        
+        if ($cache !== null) {
+            echo $cache;
+            return;
+        }
+        
+        // Essayer d'abord avec 'mode'
+        $value = pfz_get_ipsec_ph1_static_value($ikeid, 'mode');
+        
+        // Si vide, essayer avec 'p1mode' (utilisé dans certaines versions de pfSense)
+        if (empty($value)) {
+            $value = pfz_get_ipsec_ph1_static_value($ikeid, 'p1mode');
+        }
+        
+        // Si toujours vide, utiliser une valeur par défaut (0 = main mode)
+        if (empty($value)) {
+            $value = "0";
+        }
+        
+        pfz_set_cache($cache_key, $value);
+        echo $value;
+        return;
+    }
+    
+    // If the value is static (like iketype, etc.), use longer cache
     if (pfz_is_static_ipsec_value($valuekey)) {
         echo pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
         return;
@@ -807,8 +845,16 @@ function pfz_get_ipsec_ph2_static_value($uniqid, $valuekey) {
     
     $a_phase2 = pfz_get_ipsec_config('phase2');
     
-    // Par défaut une phase 2 n'est pas désactivée (0)
-    $value = ($valuekey == 'disabled') ? "0" : "";
+    // Valeurs par défaut selon le type
+    if ($valuekey == 'disabled') {
+        $value = "0";  // Par défaut une phase 2 n'est pas désactivée
+    } else if ($valuekey == 'mode') {
+        $value = "1";  // Par défaut, tunnel mode (1)
+    } else if ($valuekey == 'protocol') {
+        $value = "1";  // Par défaut, esp (1)
+    } else {
+        $value = "";
+    }
     
     foreach ($a_phase2 as $data) {
         if ($data['uniqid'] == $uniqid) {
