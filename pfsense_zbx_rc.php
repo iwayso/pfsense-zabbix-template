@@ -1,4 +1,34 @@
-<?php
+// Get IPSEC configuration with caching
+function pfz_get_ipsec_config($phase = 'phase1') {
+    $cache_key = "ipsec_config_{$phase}";
+    $cache = pfz_get_cache($cache_key, CACHE_DURATION_STATIC);
+    
+    if ($cache !== null) {
+        return $cache;
+    }
+    
+    include_once_track('ipsec.inc');
+    global $config;
+    
+    init_config_arr(array('ipsec', $phase));
+    $config_data = &$config['ipsec'][$phase];
+    
+    pfz_set_cache($cache_key, $config_data);
+    return $config_data;
+}
+
+// Helper function to determine if a value is static or dynamic
+function pfz_is_static_ipsec_value($valuekey) {
+    $static_values = array(
+        'iketype', 'mode', 'protocol', 'interface', 'remote-gateway', 
+        'encryption', 'lifetime', 'disabled', 'authentication_method',
+        'descr', 'nat', 'localid', 'remoteid', 'mobike', 'rekey_enable',
+        'dpd_delay', 'dpd_maxfail', 'closeaction', 'reauth_enable',
+        'tunnel_local', 'tunnel_remote', 'pfsgroup', 'p1mode'  // Ajout de "p1mode"
+    );
+    
+    return in_array($valuekey, $static_values);
+}<?php
 /*** 
 pfsense_zbx.php - pfSense Zabbix Interface
 Version 0.24.9 - 2025-03-12
@@ -19,6 +49,10 @@ define('CACHE_DURATION_SHORT', 60); // 1 minute
 define('CACHE_DURATION_MEDIUM', 300); // 5 minutes
 define('CACHE_DURATION_LONG', 3600); // 1 hour
 define('CACHE_DURATION_STATIC', 86400); // 24 hours - for values that rarely change
+define('CACHE_DURATION_REALTIME', 5); // 5 seconds - for critical status values
+
+// Services critiques pour lesquels le cache est désactivé ou très court
+$CRITICAL_SERVICES = array('openvpn', 'ipsec', 'ppp');
 
 // Cache directory
 define('CACHE_DIR', '/tmp/pfz_cache');
@@ -53,7 +87,12 @@ if (!function_exists('str_contains')) {
 }
 
 // Cache management functions
-function pfz_get_cache($key, $duration = CACHE_DURATION_MEDIUM) {
+function pfz_get_cache($key, $duration = CACHE_DURATION_MEDIUM, $force_refresh = false) {
+    // Si force_refresh est actif, on ignore complètement le cache
+    if ($force_refresh) {
+        return null;
+    }
+    
     $cache_file = CACHE_DIR . '/' . md5($key) . '.cache';
     
     if (file_exists($cache_file) && (time() - filemtime($cache_file) < $duration)) {
@@ -68,36 +107,142 @@ function pfz_set_cache($key, $data) {
     file_put_contents($cache_file, serialize($data));
 }
 
-// Get IPSEC configuration with caching
-function pfz_get_ipsec_config($phase = 'phase1') {
-    $cache_key = "ipsec_config_{$phase}";
-    $cache = pfz_get_cache($cache_key, CACHE_DURATION_STATIC);
-    
-    if ($cache !== null) {
-        return $cache;
+// Nouvelles fonctions de cache groupé 
+function pfz_get_cache_group($group, $key, $duration = CACHE_DURATION_MEDIUM, $force_refresh = false) {
+    // Si force_refresh est actif, on ignore complètement le cache
+    if ($force_refresh) {
+        return null;
     }
     
-    include_once_track('ipsec.inc');
-    global $config;
+    $cache_file = CACHE_DIR . '/group_' . md5($group) . '.cache';
     
-    init_config_arr(array('ipsec', $phase));
-    $config_data = &$config['ipsec'][$phase];
+    if (file_exists($cache_file) && (time() - filemtime($cache_file) < $duration)) {
+        $data = unserialize(file_get_contents($cache_file));
+        return isset($data[$key]) ? $data[$key] : null;
+    }
     
-    pfz_set_cache($cache_key, $config_data);
-    return $config_data;
+    return null;
 }
 
-// Helper function to determine if a value is static or dynamic
-function pfz_is_static_ipsec_value($valuekey) {
-    $static_values = array(
-        'iketype', 'mode', 'protocol', 'interface', 'remote-gateway', 
-        'encryption', 'lifetime', 'disabled', 'authentication_method',
-        'descr', 'nat', 'localid', 'remoteid', 'mobike', 'rekey_enable',
-        'dpd_delay', 'dpd_maxfail', 'closeaction', 'reauth_enable',
-        'tunnel_local', 'tunnel_remote', 'pfsgroup', 'p1mode'  // Ajout de "p1mode"
+// Fonction qui détermine si un service est critique et nécessite un rafraîchissement fréquent
+function pfz_is_critical_service($service_name) {
+    global $CRITICAL_SERVICES;
+    
+    foreach ($CRITICAL_SERVICES as $critical) {
+        if (strpos($service_name, $critical) !== false) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+function pfz_set_cache_group($group, $key, $value) {
+    $cache_file = CACHE_DIR . '/group_' . md5($group) . '.cache';
+    
+    if (file_exists($cache_file)) {
+        $data = unserialize(file_get_contents($cache_file));
+    } else {
+        $data = array();
+    }
+    
+    $data[$key] = $value;
+    file_put_contents($cache_file, serialize($data));
+}
+
+function pfz_get_cache_group_all($group, $duration = CACHE_DURATION_MEDIUM) {
+    $cache_file = CACHE_DIR . '/group_' . md5($group) . '.cache';
+    
+    if (file_exists($cache_file) && (time() - filemtime($cache_file) < $duration)) {
+        return unserialize(file_get_contents($cache_file));
+    }
+    
+    return array();
+}
+
+function pfz_set_cache_group_all($group, $data) {
+    $cache_file = CACHE_DIR . '/group_' . md5($group) . '.cache';
+    file_put_contents($cache_file, serialize($data));
+}
+
+// Get cached IPsec Phase 1 values with grouped cache
+function pfz_get_ipsec_ph1_values($ikeid) {
+    $group = "ipsec_ph1_values";
+    $all_values = pfz_get_cache_group_all($group, CACHE_DURATION_STATIC);
+    
+    if (isset($all_values[$ikeid])) {
+        return $all_values[$ikeid];
+    }
+    
+    $a_phase1 = pfz_get_ipsec_config('phase1');
+    
+    // Valeurs par défaut
+    $values = array(
+        'disabled' => "0",
+        'mode' => "0",
+        'p1mode' => "0",
+        'iketype' => "0",
+        'protocol' => "0"
     );
     
-    return in_array($valuekey, $static_values);
+    foreach ($a_phase1 as $data) {
+        if ($data['ikeid'] == $ikeid) {
+            // Copier toutes les valeurs statiques
+            foreach ($data as $key => $val) {
+                if ($key == 'disabled') {
+                    $values[$key] = "1";
+                } else {
+                    $values[$key] = pfz_valuemap("ipsec." . $key, $val, $val);
+                }
+            }
+            break;
+        }
+    }
+    
+    // Mettre à jour le cache groupé
+    $all_values[$ikeid] = $values;
+    pfz_set_cache_group_all($group, $all_values);
+    
+    return $values;
+}
+
+// Get cached IPsec Phase 2 values with grouped cache
+function pfz_get_ipsec_ph2_values($uniqid) {
+    $group = "ipsec_ph2_values";
+    $all_values = pfz_get_cache_group_all($group, CACHE_DURATION_STATIC);
+    
+    if (isset($all_values[$uniqid])) {
+        return $all_values[$uniqid];
+    }
+    
+    $a_phase2 = pfz_get_ipsec_config('phase2');
+    
+    // Valeurs par défaut
+    $values = array(
+        'disabled' => "0",
+        'mode' => "1",      // tunnel mode par défaut
+        'protocol' => "1"   // esp par défaut
+    );
+    
+    foreach ($a_phase2 as $data) {
+        if ($data['uniqid'] == $uniqid) {
+            // Copier toutes les valeurs statiques
+            foreach ($data as $key => $val) {
+                if ($key == 'disabled') {
+                    $values[$key] = "1";
+                } else {
+                    $values[$key] = pfz_valuemap("ipsec_ph2." . $key, $val, $val);
+                }
+            }
+            break;
+        }
+    }
+    
+    // Mettre à jour le cache groupé
+    $all_values[$uniqid] = $values;
+    pfz_set_cache_group_all($group, $all_values);
+    
+    return $values;
 }
 
 //Testing function, for template creating purpose
@@ -340,10 +485,23 @@ function pfz_openvpn_serverdiscovery() {
     echo json_encode($json_data);
 }
 
-// Get OpenVPN Server Value
+// Get OpenVPN Server Value with improved reactivity
 function pfz_openvpn_servervalue($server_id, $valuekey) {
+    // Pour le statut, utiliser une durée de cache ultra-courte
+    $force_refresh = ($valuekey == "status");
+    $cache_duration = ($valuekey == "status") ? CACHE_DURATION_REALTIME : CACHE_DURATION_MEDIUM;
+    
+    $cache_key = "openvpn_server_{$server_id}_{$valuekey}";
+    $cache = pfz_get_cache($cache_key, $cache_duration, $force_refresh);
+    
+    if ($cache !== null) {
+        echo $cache;
+        return;
+    }
+    
     $servers = pfz_openvpn_get_all_servers();     
-     
+    $value = "";
+    
     foreach ($servers as $server) {
         if ($server['vpnid'] == $server_id) {
             $value = $server[$valuekey];
@@ -377,7 +535,8 @@ function pfz_openvpn_servervalue($server_id, $valuekey) {
             $value = pfz_valuemap("openvpn.server.mode", $value);
             break;
     }
-     
+    
+    pfz_set_cache($cache_key, $value);
     echo $value;
 }
 
@@ -539,6 +698,21 @@ function pfz_services_discovery() {
 // 2020-09-28: Corrected Space Replace
 function pfz_service_value($name, $value) {
     include_once_track('service-utils.inc');
+    
+    // Pour les valeurs de statut des services critiques, utiliser un cache ultra-court ou pas de cache
+    $is_status_check = ($value == "status");
+    $is_critical = pfz_is_critical_service($name);
+    $force_refresh = $is_status_check && $is_critical;
+    $cache_duration = ($is_status_check && $is_critical) ? CACHE_DURATION_REALTIME : CACHE_DURATION_MEDIUM;
+    
+    $cache_key = "service_value_{$name}_{$value}";
+    $cache = pfz_get_cache($cache_key, $cache_duration, $force_refresh);
+    
+    if ($cache !== null) {
+        echo $cache;
+        return;
+    }
+    
     $services = get_services();     
     $name = str_replace("__", " ", $name);
            
@@ -568,34 +742,37 @@ function pfz_service_value($name, $value) {
                 case "status":
                     $status = get_service_status($service);
                     if ($status == "") $status = 0;
+                    pfz_set_cache($cache_key, $status);
                     echo $status;
                     return;
 
                 case "name":
+                    pfz_set_cache($cache_key, $namecfr);
                     echo $namecfr;
                     return;
 
                 case "enabled":
-                    if (is_service_enabled($service['name']))
-                        echo 1;
-                    else
-                        echo 0;
+                    $enabled = is_service_enabled($service['name']) ? 1 : 0;
+                    pfz_set_cache($cache_key, $enabled);
+                    echo $enabled;
                     return;
 
                 case "run_on_carp_slave":
-                    if (in_array($carpcfr, $stopped_on_carp_slave))
-                        echo 0;
-                    else
-                        echo 1;
+                    $run_on_slave = in_array($carpcfr, $stopped_on_carp_slave) ? 0 : 1;
+                    pfz_set_cache($cache_key, $run_on_slave);
+                    echo $run_on_slave;
                     return;
                     
                 default:               
-                    echo $service[$value];
+                    $result = $service[$value] ?? 0;
+                    pfz_set_cache($cache_key, $result);
+                    echo $result;
                     return;
             }
         }                                              
     }
 
+    pfz_set_cache($cache_key, 0);
     echo 0;
 }
 
@@ -647,8 +824,11 @@ function pfz_gw_discovery() {
 }
 
 function pfz_gw_value($gw, $valuekey) {
+    // Pour les statuts, utiliser un cache ultra-court
+    $cache_duration = ($valuekey == "status") ? CACHE_DURATION_REALTIME : CACHE_DURATION_SHORT;
+    
     $cache_key = "gw_value_{$gw}_{$valuekey}";
-    $cache = pfz_get_cache($cache_key, CACHE_DURATION_SHORT);
+    $cache = pfz_get_cache($cache_key, $cache_duration);
     
     if ($cache !== null) {
         echo $cache;
@@ -741,65 +921,24 @@ function pfz_get_ipsec_ph1_static_value($ikeid, $valuekey) {
 }
 
 function pfz_ipsec_ph1($ikeid, $valuekey) {    
-    // Les valeurs "disabled" nécessitent un traitement particulier
-    if ($valuekey == 'disabled') {
-        $value = pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
+    // Pour les valeurs dynamiques (comme le statut), garder un cache séparé avec une durée courte
+    if ($valuekey == 'status') {
+        $value = pfz_ipsec_status($ikeid);
         echo $value;
         return;
     }
     
-    // Cas spécial pour "mode" - vérifier si c'est en fait "p1mode" dans la config
-    if ($valuekey == 'mode') {
-        $cache_key = "ipsec_ph1_{$ikeid}_mode";
-        $cache = pfz_get_cache($cache_key, CACHE_DURATION_STATIC);
-        
-        if ($cache !== null) {
-            echo $cache;
-            return;
-        }
-        
-        // Essayer d'abord avec 'mode'
-        $value = pfz_get_ipsec_ph1_static_value($ikeid, 'mode');
-        
-        // Si vide, essayer avec 'p1mode' (utilisé dans certaines versions de pfSense)
-        if (empty($value)) {
-            $value = pfz_get_ipsec_ph1_static_value($ikeid, 'p1mode');
-        }
-        
-        // Si toujours vide, utiliser une valeur par défaut (0 = main mode)
-        if (empty($value)) {
-            $value = "0";
-        }
-        
-        pfz_set_cache($cache_key, $value);
-        echo $value;
+    // Pour toutes les autres valeurs (statiques), utiliser le cache groupé
+    $values = pfz_get_ipsec_ph1_values($ikeid);
+    
+    // Cas spécial pour "mode"
+    if ($valuekey == 'mode' && empty($values['mode']) && isset($values['p1mode'])) {
+        echo $values['p1mode'];
         return;
     }
     
-    // If the value is static (like iketype, etc.), use longer cache
-    if (pfz_is_static_ipsec_value($valuekey)) {
-        echo pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
-        return;
-    }
-    
-    // For non-static values like status
-    $cache_key = "ipsec_ph1_{$ikeid}_{$valuekey}";
-    $cache = pfz_get_cache($cache_key, CACHE_DURATION_SHORT);
-    
-    if ($cache !== null) {
-        echo $cache;
-        return;
-    }
-    
-    $value = "";    
-    switch ($valuekey) {
-        case 'status':
-            $value = pfz_ipsec_status($ikeid);
-            break;
-            
-        default:
-            $value = pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
-    }
+    echo isset($values[$valuekey]) ? $values[$valuekey] : "";
+}
     
     pfz_set_cache($cache_key, $value);
     echo $value;
@@ -875,41 +1014,22 @@ function pfz_get_ipsec_ph2_static_value($uniqid, $valuekey) {
 function pfz_ipsec_ph2($uniqid, $valuekey) {
     $valuecfr = explode(".", $valuekey);
     
-    // Les valeurs "disabled" nécessitent un traitement particulier
-    if ($valuekey == 'disabled' || $valuecfr[0] == 'disabled') {
-        $value = pfz_get_ipsec_ph2_static_value($uniqid, 'disabled');
+    // Pour les valeurs dynamiques (comme le statut), accès direct sans cache
+    if ($valuecfr[0] == 'status') {
+        $idarr = explode(".", $uniqid);
+        $statuskey = "state";
+        if (isset($valuecfr[1])) $statuskey = $valuecfr[1];
+        
+        $value = pfz_ipsec_status($idarr[0], $idarr[1], $statuskey);
         echo $value;
         return;
     }
     
-    // If the value is static (like mode, protocol, etc.), use longer cache
-    if (pfz_is_static_ipsec_value($valuekey)) {
-        echo pfz_get_ipsec_ph2_static_value($uniqid, $valuekey);
-        return;
-    }
+    // Pour toutes les autres valeurs (statiques), utiliser le cache groupé
+    $values = pfz_get_ipsec_ph2_values($uniqid);
     
-    // For non-static values
-    $cache_key = "ipsec_ph2_{$uniqid}_{$valuekey}";
-    $cache = pfz_get_cache($cache_key, CACHE_DURATION_SHORT);
-    
-    if ($cache !== null) {
-        echo $cache;
-        return;
-    }
-    
-    $value = "";
-        
-    switch ($valuecfr[0]) {
-        case 'status':
-            $idarr = explode(".", $uniqid);
-            $statuskey = "state";
-            if (isset($valuecfr[1])) $statuskey = $valuecfr[1]; 
-            $value = pfz_ipsec_status($idarr[0], $idarr[1], $statuskey);
-            break;
-            
-        default:
-            $value = pfz_get_ipsec_ph2_static_value($uniqid, $valuekey);
-    }
+    echo isset($values[$valuekey]) ? $values[$valuekey] : "";
+}
     
     pfz_set_cache($cache_key, $value);
     echo $value;
@@ -917,7 +1037,8 @@ function pfz_ipsec_ph2($uniqid, $valuekey) {
 
 function pfz_ipsec_status($ikeid, $reqid = -1, $valuekey = 'state') {
     $cache_key = "ipsec_status_{$ikeid}_{$reqid}_{$valuekey}";
-    $cache = pfz_get_cache($cache_key, CACHE_DURATION_SHORT);
+    // Utiliser un cache ultra-court pour les statuts
+    $cache = pfz_get_cache($cache_key, CACHE_DURATION_REALTIME);
     
     if ($cache !== null) {
         return $cache;
@@ -1999,12 +2120,34 @@ function pfz_discovery($section) {
     }         
 }
 
+function pfz_clean_old_cache($max_age = 86400) {
+    if (!is_dir(CACHE_DIR)) return 0;
+    
+    $files = glob(CACHE_DIR . '/*.cache');
+    $now = time();
+    $count = 0;
+    
+    foreach ($files as $file) {
+        if ($now - filemtime($file) > $max_age) {
+            unlink($file);
+            $count++;
+        }
+    }
+    
+    return $count;
+}
+
 //Main Code
 $mainArgument = isset($argv[1]) ? strtolower($argv[1]) : '';
 
 if (substr($mainArgument, -4, 4) == "cron") {
     // A longer time limit for cron tasks.
     set_time_limit(CRON_TIME_LIMIT);
+    
+    // Nettoyer les vieux caches lors des exécutions cron
+    if (rand(1, 10) == 1) { // ~10% de chance d'exécution pour éviter de le faire à chaque fois
+        pfz_clean_old_cache(86400 * 7); // Nettoyer les caches plus vieux que 7 jours
+    }
 } else {
     // Set a timeout to prevent a blocked call from stopping all future calls.
     set_time_limit(DEFAULT_TIME_LIMIT);
@@ -2111,6 +2254,40 @@ switch ($mainArgument) {
                 unlink($file);
             }
             echo "Cache cleared\n";
+        }
+        break;
+    case "cache_stats":
+        // Afficher des statistiques sur les fichiers cache
+        if (is_dir(CACHE_DIR)) {
+            $files = glob(CACHE_DIR . '/*.cache');
+            $group_count = 0;
+            $normal_count = 0;
+            $total_size = 0;
+            
+            foreach ($files as $file) {
+                $total_size += filesize($file);
+                if (strpos(basename($file), 'group_') === 0) {
+                    $group_count++;
+                } else {
+                    $normal_count++;
+                }
+            }
+            
+            echo "Cache Statistics:\n";
+            echo "  Group cache files: " . $group_count . "\n";
+            echo "  Normal cache files: " . $normal_count . "\n";
+            echo "  Total cache files: " . count($files) . "\n";
+            echo "  Total cache size: " . round($total_size / 1024, 2) . " KB\n";
+            
+            // Fichiers les plus volumineux
+            usort($files, function($a, $b) {
+                return filesize($b) - filesize($a);
+            });
+            
+            echo "  Top 5 largest cache files:\n";
+            for ($i = 0; $i < min(5, count($files)); $i++) {
+                echo "    " . basename($files[$i]) . ": " . round(filesize($files[$i]) / 1024, 2) . " KB\n";
+            }
         }
         break;
     default:
