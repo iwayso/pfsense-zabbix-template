@@ -711,7 +711,9 @@ function pfz_get_ipsec_ph1_static_value($ikeid, $valuekey) {
     
     $a_phase1 = pfz_get_ipsec_config('phase1');
     
-    $value = "";
+    // Par défaut un tunnel n'est pas désactivé (0)
+    $value = ($valuekey == 'disabled') ? "0" : "";
+    
     foreach ($a_phase1 as $data) {
         if ($data['ikeid'] == $ikeid) {
             if (array_key_exists($valuekey, $data)) {
@@ -729,6 +731,13 @@ function pfz_get_ipsec_ph1_static_value($ikeid, $valuekey) {
 }
 
 function pfz_ipsec_ph1($ikeid, $valuekey) {    
+    // Les valeurs "disabled" nécessitent un traitement particulier
+    if ($valuekey == 'disabled') {
+        $value = pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
+        echo $value;
+        return;
+    }
+    
     // If the value is static (like iketype, mode, etc.), use longer cache
     if (pfz_is_static_ipsec_value($valuekey)) {
         echo pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
@@ -748,11 +757,6 @@ function pfz_ipsec_ph1($ikeid, $valuekey) {
     switch ($valuekey) {
         case 'status':
             $value = pfz_ipsec_status($ikeid);
-            break;
-            
-        case 'disabled':
-            $value = pfz_get_ipsec_ph1_static_value($ikeid, $valuekey);
-            if (empty($value)) $value = "0";
             break;
             
         default:
@@ -803,7 +807,9 @@ function pfz_get_ipsec_ph2_static_value($uniqid, $valuekey) {
     
     $a_phase2 = pfz_get_ipsec_config('phase2');
     
-    $value = "";
+    // Par défaut une phase 2 n'est pas désactivée (0)
+    $value = ($valuekey == 'disabled') ? "0" : "";
+    
     foreach ($a_phase2 as $data) {
         if ($data['uniqid'] == $uniqid) {
             if (array_key_exists($valuekey, $data)) {
@@ -822,6 +828,13 @@ function pfz_get_ipsec_ph2_static_value($uniqid, $valuekey) {
 
 function pfz_ipsec_ph2($uniqid, $valuekey) {
     $valuecfr = explode(".", $valuekey);
+    
+    // Les valeurs "disabled" nécessitent un traitement particulier
+    if ($valuekey == 'disabled' || $valuecfr[0] == 'disabled') {
+        $value = pfz_get_ipsec_ph2_static_value($uniqid, 'disabled');
+        echo $value;
+        return;
+    }
     
     // If the value is static (like mode, protocol, etc.), use longer cache
     if (pfz_is_static_ipsec_value($valuekey)) {
@@ -846,11 +859,6 @@ function pfz_ipsec_ph2($uniqid, $valuekey) {
             $statuskey = "state";
             if (isset($valuecfr[1])) $statuskey = $valuecfr[1]; 
             $value = pfz_ipsec_status($idarr[0], $idarr[1], $statuskey);
-            break;
-            
-        case 'disabled':
-            $value = pfz_get_ipsec_ph2_static_value($uniqid, 'disabled');
-            if (empty($value)) $value = "0";
             break;
             
         default:
